@@ -123,6 +123,7 @@ class Script(scripts.Script):
         self.latest_model_hash = ""
         # Highres hack
         self.highres_disable = False
+        self.highres_weight = 1
         self.unet = None
 
     def title(self):
@@ -156,6 +157,7 @@ class Script(scripts.Script):
                     module = gr.Dropdown(list(self.preprocessor.keys()), label=f"Preprocessor", value="none")
                     model = gr.Dropdown(list(cn_models.keys()), label=f"Model", value="None")
                     weight = gr.Slider(label=f"Weight", value=1.0, minimum=0.0, maximum=2.0, step=.05)
+                    highres_weight = gr.Slider(label=f"HR Weight", value=1.0, minimum=0.0, maximum=2.0, step=.05)
 
                     ctrls += (module, model, weight,)
                     # model_dropdowns.append(model)
@@ -190,11 +192,11 @@ class Script(scripts.Script):
                 
                 create_button.click(fn=create_canvas, inputs=[canvas_height, canvas_width], outputs=[input_image])
                 ctrls += (input_image, scribble_mode, resize_mode)
-                ctrls += (lowvram,highres_disable)
+                ctrls += (lowvram, highres_disable, highres_weight)
 
         return ctrls
 
-    def set_infotext_fields(self, p, params, weight):
+    def set_infotext_fields(self, p, params, weight, highres_weight, highres_disable):
         module, model = params
         if model == "None" or model == "none":
             return
@@ -203,6 +205,8 @@ class Script(scripts.Script):
             f"ControlNet Module": module,
             f"ControlNet Model": model,
             f"ControlNet Weight": weight,
+            f"ControlNet Highres.fix Weight": highres_weight,
+            f"ControlNet Highres.fix Disable": highres_disable,
         })
 
     def process(self, p, *args):
@@ -220,13 +224,14 @@ class Script(scripts.Script):
                 self.latest_network.restore(unet)
                 self.latest_network = None
     
-        enabled, module, model, weight,image, scribble_mode, resize_mode, lowvram, highres_disable = args
+        enabled, module, model, weight, image, scribble_mode, resize_mode, lowvram, highres_disable, highres_weight = args
 
         if not enabled:
             restore_networks()
             return
         
         self.highres_disable = highres_disable
+        self.highres_weight = highres_weight
         self.unet = unet
 
         models_changed = self.latest_params[1] != model \
@@ -306,7 +311,7 @@ class Script(scripts.Script):
             
         # control = torch.stack([control for _ in range(bsz)], dim=0)
         self.latest_network.notify(control, weight)
-        self.set_infotext_fields(p, self.latest_params, weight)
+        self.set_infotext_fields(p, self.latest_params, weight, highres_weight, highres_disable)
         
     def postprocess(self, p, processed, *args):
         if self.latest_network is None:
@@ -329,6 +334,8 @@ class Script(scripts.Script):
             restore_networks()
         else:
             print("Highres.fix still using ControlNet model")
+            self.latest_network.weight=self.highres_weight
+
 
     def describe(self):
         return "controlnet"
