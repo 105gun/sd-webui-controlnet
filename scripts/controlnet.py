@@ -121,6 +121,9 @@ class Script(scripts.Script):
         }
         self.input_image = None
         self.latest_model_hash = ""
+        # Highres hack
+        self.highres_disable = False
+        self.unet = None
 
     def title(self):
         return "ControlNet for generating"
@@ -144,6 +147,7 @@ class Script(scripts.Script):
                     enabled = gr.Checkbox(label='Enable', value=False)
                     scribble_mode = gr.Checkbox(label='Scribble Mode (Reverse color)', value=False)
                     lowvram = gr.Checkbox(label='Low VRAM (8GB or below)', value=False)
+                    highres_disable = gr.Checkbox(label='Disable ControlNet in Highres.fix', value=False)
                     
                 ctrls += (enabled,)
                 self.infotext_fields.append((enabled, "ControlNet Enabled"))
@@ -186,7 +190,7 @@ class Script(scripts.Script):
                 
                 create_button.click(fn=create_canvas, inputs=[canvas_height, canvas_width], outputs=[input_image])
                 ctrls += (input_image, scribble_mode, resize_mode)
-                ctrls += (lowvram,)
+                ctrls += (lowvram,highres_disable)
 
         return ctrls
 
@@ -209,6 +213,8 @@ class Script(scripts.Script):
         """
         unet = p.sd_model.model.diffusion_model
 
+        print(p.sd_model.model.diffusion_model)
+
         def restore_networks():
             if self.latest_network is not None:
                 print("restoring last networks")
@@ -216,11 +222,14 @@ class Script(scripts.Script):
                 self.latest_network.restore(unet)
                 self.latest_network = None
     
-        enabled, module, model, weight,image, scribble_mode, resize_mode, lowvram = args
+        enabled, module, model, weight,image, scribble_mode, resize_mode, lowvram, highres_disable = args
 
         if not enabled:
             restore_networks()
             return
+        
+        self.highres_disable = highres_disable
+        self.unet = unet
 
         models_changed = self.latest_params[1] != model \
             or self.latest_model_hash != p.sd_model.sd_model_hash or self.latest_network == None \
@@ -300,6 +309,7 @@ class Script(scripts.Script):
         # control = torch.stack([control for _ in range(bsz)], dim=0)
         self.latest_network.notify(control, weight)
         self.set_infotext_fields(p, self.latest_params, weight)
+        print("DONE!!!")
         
     def postprocess(self, p, processed, *args):
         if self.latest_network is None:
@@ -310,6 +320,22 @@ class Script(scripts.Script):
                 result = 255-result
             processed.images.extend([result])
 
+    def disable(self):
+        def restore_networks():
+            if self.latest_network is not None:
+                print("restoring last networks")
+                self.input_image = None
+                self.latest_network.restore(self.unet)
+                self.latest_network = None
+        if(self.highres_disable):
+            print("Disable ControlNet model in Highres.fix")
+            restore_networks()
+        else:
+            print("Highres.fix still using ControlNet model")
+
+    def describe(self):
+        return "controlnet"
+
 def update_script_args(p, value, arg_idx):
     for s in scripts.scripts_txt2img.alwayson_scripts:
         if isinstance(s, Script):
@@ -318,6 +344,12 @@ def update_script_args(p, value, arg_idx):
             args[s.args_from + arg_idx] = value
             p.script_args = tuple(args)
             break
+
+def disable_controlnet():
+    for s in scripts.scripts_txt2img.alwayson_scripts:
+        #if isinstance(s, controlClass):
+        if s.describe()=="controlnet":
+            s.disable()
 
 
 # def confirm_models(p, xs):
