@@ -213,8 +213,6 @@ class Script(scripts.Script):
         """
         unet = p.sd_model.model.diffusion_model
 
-        print(p.sd_model.model.diffusion_model)
-
         def restore_networks():
             if self.latest_network is not None:
                 print("restoring last networks")
@@ -309,7 +307,6 @@ class Script(scripts.Script):
         # control = torch.stack([control for _ in range(bsz)], dim=0)
         self.latest_network.notify(control, weight)
         self.set_infotext_fields(p, self.latest_params, weight)
-        print("DONE!!!")
         
     def postprocess(self, p, processed, *args):
         if self.latest_network is None:
