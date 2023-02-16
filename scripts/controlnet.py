@@ -11,7 +11,7 @@ import gradio as gr
 import numpy as np
 from einops import rearrange
 from modules import sd_models
-from torchvision.transforms import Resize, InterpolationMode, ToPILImage, CenterCrop, Compose
+from torchvision.transforms import Resize, InterpolationMode, CenterCrop, Compose
 from scripts.cldm import PlugableControlModel
 from scripts.processor import *
 
@@ -20,6 +20,7 @@ cn_models = {}      # "My_Lora(abcd1234)" -> C:/path/to/model.safetensors
 cn_models_names = {}  # "my_lora" -> "My_Lora(abcd1234)"
 cn_models_dir = os.path.join(scripts.basedir(), "models")
 os.makedirs(cn_models_dir, exist_ok=True)
+default_conf = os.path.join(cn_models_dir, "cldm_v15.yaml")
 
 def traverse_all_files(curr_path, model_list):
     f_list = [(os.path.join(curr_path, entry.name), entry.stat())
@@ -76,10 +77,9 @@ def find_closest_lora_model_name(search: str):
 def update_cn_models():
     global cn_models, cn_models_names
     res = OrderedDict()
-    extra_lora_paths = (extra_lora_path
-                        for extra_lora_path
-                        in (shared.opts.data.get("control_net_models_path", None), shared.cmd_opts.controlnet_dir)
-                        if extra_lora_path is not None and os.path.exists(extra_lora_path))
+    ext_dirs = (shared.opts.data.get("control_net_models_path", None), getattr(shared.cmd_opts, 'controlnet_dir', None))
+    extra_lora_paths = (extra_lora_path for extra_lora_path in ext_dirs
+                if extra_lora_path is not None and os.path.exists(extra_lora_path))
     paths = [cn_models_dir, *extra_lora_paths]
 
     for path in paths:
@@ -119,6 +119,16 @@ class Script(scripts.Script):
             "fake_scribble": fake_scribble,
             "segmentation": uniformer,
         }
+        self.unloadable = {
+            "hed": unload_hed,
+            "fake_scribble": unload_hed,
+            "mlsd": unload_mlsd,
+            "depth": unload_midas,
+            "normal_map": unload_midas,
+            "openpose": unload_openpose,
+            "openpose_hand": unload_openpose,
+            "segmentation": unload_uniformer,
+        }
         self.input_image = None
         self.latest_model_hash = ""
         # Highres hack
@@ -146,8 +156,9 @@ class Script(scripts.Script):
             with gr.Accordion('ControlNet', open=False):
                 with gr.Row():
                     enabled = gr.Checkbox(label='Enable', value=False)
-                    scribble_mode = gr.Checkbox(label='Scribble Mode (Reverse color)', value=False)
-                    lowvram = gr.Checkbox(label='Low VRAM (8GB or below)', value=False)
+                    scribble_mode = gr.Checkbox(label='Scribble Mode (Invert colors)', value=False)
+                    rgbbgr_mode = gr.Checkbox(label='RGB to BGR', value=False)
+                    lowvram = gr.Checkbox(label='Low VRAM', value=False)
                     highres_disable = gr.Checkbox(label='Disable ControlNet in Highres.fix', value=False)
                     
                 ctrls += (enabled,)
@@ -188,10 +199,10 @@ class Script(scripts.Script):
                     canvas_height = gr.Slider(label="Canvas Height", minimum=256, maximum=1024, value=512, step=64)
                 create_button = gr.Button(label="Start", value='Open drawing canvas!')
                 input_image = gr.Image(source='upload', type='numpy', tool='sketch')
-                gr.Markdown(value='Change your brush width to make it thinner if you want to draw something.')
+                gr.HTML(value='<p>Enable scribble mode if your image has white background.<br >Change your brush width to make it thinner if you want to draw something.<br ></p>')
                 
                 create_button.click(fn=create_canvas, inputs=[canvas_height, canvas_width], outputs=[input_image])
-                ctrls += (input_image, scribble_mode, resize_mode)
+                ctrls += (input_image, scribble_mode, resize_mode, rgbbgr_mode)
                 ctrls += (lowvram, highres_disable, highres_weight)
 
         return ctrls
@@ -223,8 +234,28 @@ class Script(scripts.Script):
                 self.input_image = None
                 self.latest_network.restore(unet)
                 self.latest_network = None
+            
+            last_module = self.latest_params[0]
+            if last_module is not None:
+                self.unloadable.get(last_module, lambda:None)()
     
-        enabled, module, model, weight, image, scribble_mode, resize_mode, lowvram, highres_disable, highres_weight = args
+        enabled, module, model, weight, image, scribble_mode, resize_mode, rgbbgr_mode, lowvram, highres_disable, highres_weight = args
+        
+        # Other scripts can control this extension now
+        if shared.opts.data.get("control_net_allow_script_control", False):
+            enabled = getattr(p, 'control_net_enabled', enabled)
+            module = getattr(p, 'control_net_module', module)
+            model = getattr(p, 'control_net_model', model)
+            weight = getattr(p, 'control_net_weight', weight)
+            image = getattr(p, 'control_net_image', image)
+            scribble_mode = getattr(p, 'control_net_scribble_mode', scribble_mode)
+            resize_mode = getattr(p, 'control_net_resize_mode', resize_mode)
+            rgbbgr_mode = getattr(p, 'control_net_rgbbgr_mode', rgbbgr_mode)
+            lowvram = getattr(p, 'control_net_lowvram', lowvram)
+
+            input_image = getattr(p, 'control_net_input_image', None)
+        else:
+            input_image = None
 
         if not enabled:
             restore_networks()
@@ -255,21 +286,35 @@ class Script(scripts.Script):
                 raise ValueError(f"file not found: {model_path}")
 
             print(f"Loading preprocessor: {module}, model: {model}")
-            network = PlugableControlModel(model_path, os.path.join(cn_models_dir, "cldm_v15.yaml"), weight, lowvram=lowvram)
+            network = PlugableControlModel(
+                model_path=model_path, 
+                config_path=shared.opts.data.get("control_net_model_config", default_conf), 
+                weight=weight, 
+                lowvram=lowvram,
+                base_model=unet,
+            )
             network.to(p.sd_model.device, dtype=p.sd_model.dtype)
             network.hook(unet, p.sd_model)
 
             print(f"ControlNet model {model} loaded.")
             self.latest_network = network
-            
-        if image is None and getattr(p, "init_images", None):
-            input_image = HWC3(np.asarray(p.init_images[0]))
-        else:
+          
+        if input_image is not None:
+            input_image = HWC3(np.asarray(input_image))
+        elif image is not None:
             input_image = HWC3(image['image'])
             if not ((image['mask'][:, :, 0]==0).all() or (image['mask'][:, :, 0]==255).all()):
                 print("using mask as input")
                 input_image = HWC3(image['mask'][:, :, 0])
                 scribble_mode = True
+        else:
+            # use img2img init_image as default
+            input_image = getattr(p, "init_images", [None])[0]
+            if input_image is None:
+                raise ValueError('controlnet is enabled but no input image is given')
+            input_image = HWC3(np.asarray(input_image))
+                
+            
                 
         if scribble_mode:
             detected_map = np.zeros_like(input_image, dtype=np.uint8)
@@ -281,7 +326,7 @@ class Script(scripts.Script):
         detected_map = preprocessor(input_image)
         detected_map = HWC3(detected_map)
         
-        if module == "normal_map":
+        if module == "normal_map" or rgbbgr_mode:
             control = torch.from_numpy(detected_map[:, :, ::-1].copy()).float().to(devices.get_device_for("controlnet")) / 255.0
         else:
             control = torch.from_numpy(detected_map.copy()).float().to(devices.get_device_for("controlnet")) / 255.0
@@ -314,7 +359,7 @@ class Script(scripts.Script):
         self.set_infotext_fields(p, self.latest_params, weight, highres_weight, highres_disable)
         
     def postprocess(self, p, processed, *args):
-        if self.latest_network is None:
+        if self.latest_network is None or shared.opts.data.get("control_net_no_detectmap", False):
             return
         if hasattr(self, "detected_map") and self.detected_map is not None:
             result =  self.detected_map
@@ -364,8 +409,21 @@ def disable_controlnet():
 #             raise RuntimeError(f"Unknown ControlNet model: {x}")
 
 def on_ui_settings():
-  section = ('control_net', "ControlNet")
-  shared.opts.add_option("control_net_models_path", shared.OptionInfo(
-      "", "Extra path to scan for ControlNet models (e.g. training output directory)", section=section))
+    section = ('control_net', "ControlNet")
+    shared.opts.add_option("control_net_model_config", shared.OptionInfo(
+        default_conf, "Config file for Control Net models", section=section))
+    shared.opts.add_option("control_net_models_path", shared.OptionInfo(
+        "", "Extra path to scan for ControlNet models (e.g. training output directory)", section=section))
+    shared.opts.add_option("control_net_control_transfer", shared.OptionInfo(
+        False, "Apply transfer control when loading models", gr.Checkbox, {"interactive": True}, section=section))
+    shared.opts.add_option("control_net_no_detectmap", shared.OptionInfo(
+        False, "Do not append detectmap to output", gr.Checkbox, {"interactive": True}, section=section))
+    shared.opts.add_option("control_net_only_midctrl_hires", shared.OptionInfo(
+        True, "Use mid-layer control on highres pass (second pass)", gr.Checkbox, {"interactive": True}, section=section))
+    shared.opts.add_option("control_net_allow_script_control", shared.OptionInfo(
+        False, "Allow other script to control this extension", gr.Checkbox, {"interactive": True}, section=section))
+
+    # control_net_skip_hires
+
 
 script_callbacks.on_ui_settings(on_ui_settings)
