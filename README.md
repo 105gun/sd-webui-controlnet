@@ -1,3 +1,6 @@
+## Highres.fix disable
+This repo add a 'Disable ControlNet in Highres.fix' checkbox and a 'Highres Weight' Slider, which allow you to control weight in Highres.fix pass, or just simply disable it.
+
 ## sd-webui-controlnet
 (WIP) WebUI extension for ControlNet
 
