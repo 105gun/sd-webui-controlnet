@@ -211,6 +211,8 @@ class Script(scripts.Script):
                     # ctrls += (refresh_models, )
                 with gr.Row():
                     weight = gr.Slider(label=f"Weight", value=1.0, minimum=0.0, maximum=2.0, step=.05)
+                    # Highres weight no longer works
+                    # highres_weight = gr.Slider(label=f"HR Weight", value=1.0, minimum=0.0, maximum=2.0, step=.05)
                     guidance_strength =  gr.Slider(label="Guidance strength (T)", value=1.0, minimum=0.0, maximum=1.0, interactive=True)
 
                     ctrls += (module, model, weight,)
@@ -315,6 +317,8 @@ class Script(scripts.Script):
                 ctrls += (input_image, scribble_mode, resize_mode, rgbbgr_mode)
                 ctrls += (lowvram,)
                 ctrls += (processor_res, threshold_a, threshold_b, guidance_strength)
+
+                ctrls += (highres_disable, weight) # Highres weight no longer works
                 
                 input_image.orgpreprocess=input_image.preprocess
                 input_image.preprocess=svgPreprocess
@@ -354,7 +358,10 @@ class Script(scripts.Script):
                 self.unloadable.get(last_module, lambda:None)()
     
         enabled, module, model, weight, image, scribble_mode, \
-            resize_mode, rgbbgr_mode, lowvram, pres, pthr_a, pthr_b, guidance_strength = args
+            resize_mode, rgbbgr_mode, lowvram, pres, pthr_a, pthr_b, guidance_strength,\
+                 highres_disable, highres_weight  = args
+        
+        self.enabled = enabled
         
         # Other scripts can control this extension now
         if shared.opts.data.get("control_net_allow_script_control", False):
@@ -484,7 +491,7 @@ class Script(scripts.Script):
             
         # control = torch.stack([control for _ in range(bsz)], dim=0)
         self.latest_network.notify(control, weight, guidance_strength)
-        self.set_infotext_fields(p, self.latest_params, weight)
+        self.set_infotext_fields(p, self.latest_params, weight, highres_weight,highres_disable)
         
     def postprocess(self, p, processed, *args):
         is_img2img = issubclass(type(p), StableDiffusionProcessingImg2Img)
@@ -511,6 +518,7 @@ class Script(scripts.Script):
         else:
             print("Highres.fix still using ControlNet model")
             if self.enabled:
+                print("Change weight in Highres.fix",self.highres_weight)
                 self.latest_network.weight=self.highres_weight
 
 
