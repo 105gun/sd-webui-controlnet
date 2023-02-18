@@ -137,6 +137,7 @@ class Script(scripts.Script):
         self.highres_disable = False
         self.highres_weight = 1
         self.unet = None
+        self.enabled = False
 
     def title(self):
         return "ControlNet for generating"
@@ -243,6 +244,8 @@ class Script(scripts.Script):
                 self.unloadable.get(last_module, lambda:None)()
     
         enabled, module, model, weight, image, scribble_mode, resize_mode, rgbbgr_mode, lowvram, highres_disable, highres_weight = args
+
+        self.enabled = enabled
         
         # Other scripts can control this extension now
         if shared.opts.data.get("control_net_allow_script_control", False):
@@ -382,7 +385,8 @@ class Script(scripts.Script):
             restore_networks()
         else:
             print("Highres.fix still using ControlNet model")
-            self.latest_network.weight=self.highres_weight
+            if self.enabled:
+                self.latest_network.weight=self.highres_weight
 
 
     def describe(self):

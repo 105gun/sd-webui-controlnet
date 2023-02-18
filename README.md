@@ -4,9 +4,12 @@ This repo add a 'Disable ControlNet in Highres.fix' checkbox and a 'Highres Weig
 You have to modify ./modules/processing.py, like this:
 
 **Import part**
+
 `sys.path.append('./extensions/sd-webui-controlnet')`
+
 `from scripts.controlnet import disable_controlnet`
 ![QQ截图20230215205227](https://user-images.githubusercontent.com/52597991/219041010-69aaf028-9656-483e-9dab-81b88fa33612.png)
+
 **StableDiffusionProcessingTxt2Img/sample/save_intermediate()**
 ` disable_controlnet()`
 ![QQ截图20230215205255](https://user-images.githubusercontent.com/52597991/219041197-b3b6a0df-db43-47ef-bfe9-64de05262694.png)
