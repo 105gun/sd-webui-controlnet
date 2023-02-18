@@ -211,7 +211,6 @@ class Script(scripts.Script):
                     # ctrls += (refresh_models, )
                 with gr.Row():
                     weight = gr.Slider(label=f"Weight", value=1.0, minimum=0.0, maximum=2.0, step=.05)
-                    highres_weight = gr.Slider(label=f"HR Weight", value=1.0, minimum=0.0, maximum=2.0, step=.05)
                     guidance_strength =  gr.Slider(label="Guidance strength (T)", value=1.0, minimum=0.0, maximum=1.0, interactive=True)
 
                     ctrls += (module, model, weight,)
@@ -300,16 +299,14 @@ class Script(scripts.Script):
 
                 resize_mode = gr.Radio(choices=["Envelope (Outer Fit)", "Scale to Fit (Inner Fit)", "Just Resize"], value="Scale to Fit (Inner Fit)", label="Resize Mode")
                 with gr.Row():
-                    canvas_width = gr.Slider(label="Canvas Width", minimum=256, maximum=1024, value=512, step=64)
-                    canvas_height = gr.Slider(label="Canvas Height", minimum=256, maximum=1024, value=512, step=64)
-                create_button = gr.Button(label="Start", value='Open drawing canvas!')
-                input_image = gr.Image(source='upload', type='numpy', tool='sketch')
-
-                input_image.orgpreprocess=input_image.preprocess
-                input_image.preprocess=svgPreprocess
-
-                gr.HTML(value='<p>Enable scribble mode if your image has white background.<br >Change your brush width to make it thinner if you want to draw something.<br ></p>')
-                
+                    with gr.Column():
+                        canvas_width = gr.Slider(label="Canvas Width", minimum=256, maximum=1024, value=512, step=64)
+                        canvas_height = gr.Slider(label="Canvas Height", minimum=256, maximum=1024, value=512, step=64)
+                        
+                    if gradio_compat:
+                        canvas_swap_res = ToolButton(value=switch_values_symbol)
+                        
+                create_button = gr.Button(value="Create blank canvas")            
                 create_button.click(fn=create_canvas, inputs=[canvas_height, canvas_width], outputs=[input_image])
                 
                 if gradio_compat:
@@ -318,8 +315,10 @@ class Script(scripts.Script):
                 ctrls += (input_image, scribble_mode, resize_mode, rgbbgr_mode)
                 ctrls += (lowvram,)
                 ctrls += (processor_res, threshold_a, threshold_b, guidance_strength)
-                ctrls += (highres_disable, highres_weight)
                 
+                input_image.orgpreprocess=input_image.preprocess
+                input_image.preprocess=svgPreprocess
+
         return ctrls
 
     def set_infotext_fields(self, p, params, weight, highres_weight, highres_disable):
@@ -355,8 +354,7 @@ class Script(scripts.Script):
                 self.unloadable.get(last_module, lambda:None)()
     
         enabled, module, model, weight, image, scribble_mode, \
-            resize_mode, rgbbgr_mode, lowvram, pres, pthr_a, pthr_b, guidance_strength, \
-            highres_disable, highres_weight    = args
+            resize_mode, rgbbgr_mode, lowvram, pres, pthr_a, pthr_b, guidance_strength = args
         
         # Other scripts can control this extension now
         if shared.opts.data.get("control_net_allow_script_control", False):
@@ -486,7 +484,7 @@ class Script(scripts.Script):
             
         # control = torch.stack([control for _ in range(bsz)], dim=0)
         self.latest_network.notify(control, weight, guidance_strength)
-        self.set_infotext_fields(p, self.latest_params, weight, highres_weight, highres_disable)
+        self.set_infotext_fields(p, self.latest_params, weight)
         
     def postprocess(self, p, processed, *args):
         is_img2img = issubclass(type(p), StableDiffusionProcessingImg2Img)
