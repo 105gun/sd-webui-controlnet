@@ -5,19 +5,18 @@ from collections import OrderedDict
 import torch
 
 import modules.scripts as scripts
-from modules import shared, devices, script_callbacks
+from modules import shared, devices, script_callbacks, processing
 import gradio as gr
-
 import numpy as np
+
 from einops import rearrange
-from modules import sd_models
-from torchvision.transforms import Resize, InterpolationMode, CenterCrop, Compose
 from scripts.cldm import PlugableControlModel
 from scripts.processor import *
 from scripts.adapter import PlugableAdapter
 from scripts.utils import load_state_dict
-from modules.ui_components import ToolButton
+from modules import sd_models
 from modules.processing import StableDiffusionProcessingImg2Img
+from torchvision.transforms import Resize, InterpolationMode, CenterCrop, Compose
 
 gradio_compat = True
 try:
@@ -29,10 +28,15 @@ except ImportError:
     pass
 
 # svgsupports
-import io
-import base64
-from svglib.svglib import svg2rlg
-from reportlab.graphics import renderPM
+svgsupport = False
+try:
+    import io
+    import base64
+    from svglib.svglib import svg2rlg
+    from reportlab.graphics import renderPM
+    svgsupport = True
+except ImportError:
+    pass
 
 CN_MODEL_EXTS = [".pt", ".pth", ".ckpt", ".safetensors"]
 cn_models = {}      # "My_Lora(abcd1234)" -> C:/path/to/model.safetensors
@@ -43,6 +47,17 @@ default_conf_adapter = os.path.join(cn_models_dir, "sketch_adapter_v14.yaml")
 default_conf = os.path.join(cn_models_dir, "cldm_v15.yaml")
 refresh_symbol = '\U0001f504'  # 🔄
 switch_values_symbol = '\U000021C5' # ⇅
+
+
+class ToolButton(gr.Button, gr.components.FormComponent):
+    """Small button with single emoji as text, fits inside gradio forms"""
+
+    def __init__(self, **kwargs):
+        super().__init__(variant="tool", **kwargs)
+
+    def get_block_name(self):
+        return "button"
+    
 
 def traverse_all_files(curr_path, model_list):
     f_list = [(os.path.join(curr_path, entry.name), entry.stat())
@@ -96,6 +111,15 @@ def find_closest_lora_model_name(search: str):
     return cn_models_names[applicable[0]]
 
 
+def swap_img2img_pipeline(p: processing.StableDiffusionProcessingImg2Img):
+    p.__class__ = processing.StableDiffusionProcessingTxt2Img
+    dummy = processing.StableDiffusionProcessingTxt2Img()
+    for k,v in dummy.__dict__.items():
+        if hasattr(p, k):
+            continue
+        setattr(p, k, v)
+
+
 def update_cn_models():
     global cn_models, cn_models_names
     res = OrderedDict()
@@ -132,6 +156,7 @@ class Script(scripts.Script):
             "none": lambda x, *args, **kwargs: x,
             "canny": canny,
             "depth": midas,
+            "depth_leres": leres,
             "hed": hed,
             "mlsd": mlsd,
             "normal_map": midas_normal,
@@ -147,6 +172,7 @@ class Script(scripts.Script):
             "fake_scribble": unload_hed,
             "mlsd": unload_mlsd,
             "depth": unload_midas,
+            "depth_leres": unload_leres,
             "normal_map": unload_midas,
             "pidinet": unload_pidinet,
             "openpose": unload_openpose,
@@ -222,58 +248,74 @@ class Script(scripts.Script):
                             gr.update(label="Annotator resolution", value=512, minimum=64, maximum=2048, step=1, interactive=True),
                             gr.update(label="Canny low threshold", minimum=1, maximum=255, value=100, step=1, interactive=True),
                             gr.update(label="Canny high threshold", minimum=1, maximum=255, value=200, step=1, interactive=True),
+                            gr.update(visible=True)
                         ]
                     elif module == "mlsd": #Hough
                         return [
                             gr.update(label="Hough Resolution", minimum=64, maximum=2048, value=512, step=1, interactive=True),
                             gr.update(label="Hough value threshold (MLSD)", minimum=0.01, maximum=2.0, value=0.1, step=0.01, interactive=True),
-                            gr.update(label="Hough distance threshold (MLSD)", minimum=0.01, maximum=20.0, value=0.1, step=0.01, interactive=True)
+                            gr.update(label="Hough distance threshold (MLSD)", minimum=0.01, maximum=20.0, value=0.1, step=0.01, interactive=True),
+                            gr.update(visible=True)
                         ]
                     elif module in ["hed", "fake_scribble"]:
                         return [
                             gr.update(label="HED Resolution", minimum=64, maximum=2048, value=512, step=1, interactive=True),
                             gr.update(label="Threshold A", value=64, minimum=64, maximum=1024, interactive=False),
                             gr.update(label="Threshold B", value=64, minimum=64, maximum=1024, interactive=False),
+                            gr.update(visible=True)
                         ]
                     elif module in ["openpose", "openpose_hand", "segmentation"]:
                         return [
                             gr.update(label="Annotator Resolution", minimum=64, maximum=2048, value=512, step=1, interactive=True),
                             gr.update(label="Threshold A", value=64, minimum=64, maximum=1024, interactive=False),
                             gr.update(label="Threshold B", value=64, minimum=64, maximum=1024, interactive=False),
+                            gr.update(visible=True)
                         ]
                     elif module == "depth":
                         return [
                             gr.update(label="Midas Resolution", minimum=64, maximum=2048, value=384, step=1, interactive=True),
                             gr.update(label="Threshold A", value=64, minimum=64, maximum=1024, interactive=False),
                             gr.update(label="Threshold B", value=64, minimum=64, maximum=1024, interactive=False),
+                            gr.update(visible=True)
+                        ]
+                    elif module == "depth_leres":
+                        return [
+                            gr.update(label="LeReS Resolution", minimum=64, maximum=2048, value=512, step=1, interactive=True),
+                            gr.update(label="Remove Near %", value=0, minimum=0, maximum=100, step=0.1, interactive=True),
+                            gr.update(label="Remove Background %", value=0, minimum=0, maximum=100, step=0.1, interactive=True),
+                            gr.update(visible=True)
                         ]
                     elif module == "normal_map":
                         return [
                             gr.update(label="Normal Resolution", minimum=64, maximum=2048, value=512, step=1, interactive=True),
                             gr.update(label="Normal background threshold", minimum=0.0, maximum=1.0, value=0.4, step=0.01, interactive=True),
                             gr.update(label="Threshold B", value=64, minimum=64, maximum=1024, interactive=False),
+                            gr.update(visible=True)
                         ]
                     elif module == "none":
                         return [
                             gr.update(label="Normal Resolution", value=64, minimum=64, maximum=2048, interactive=False),
                             gr.update(label="Threshold A", value=64, minimum=64, maximum=1024, interactive=False),
                             gr.update(label="Threshold B", value=64, minimum=64, maximum=1024, interactive=False),
+                            gr.update(visible=False)
                         ]
                     else:
                         return [
                             gr.update(label="Annotator resolution", value=512, minimum=64, maximum=2048, step=1, interactive=True),
                             gr.update(label="Threshold A", value=64, minimum=64, maximum=1024, interactive=False),
                             gr.update(label="Threshold B", value=64, minimum=64, maximum=1024, interactive=False),
+                            gr.update(visible=True)
                         ]
                     
                 # advanced options    
-                with gr.Column(visible=gradio_compat):
+                advanced = gr.Column(visible=False)
+                with advanced:
                     processor_res = gr.Slider(label="Annotator resolution", value=64, minimum=64, maximum=2048, interactive=False)
                     threshold_a =  gr.Slider(label="Threshold A", value=64, minimum=64, maximum=1024, interactive=False)
                     threshold_b =  gr.Slider(label="Threshold B", value=64, minimum=64, maximum=1024, interactive=False)
                 
                 if gradio_compat:    
-                    module.change(build_sliders, inputs=[module], outputs=[processor_res, threshold_a, threshold_b])
+                    module.change(build_sliders, inputs=[module], outputs=[processor_res, threshold_a, threshold_b, advanced])
                     
                 self.infotext_fields.extend([
                     (module, f"ControlNet Preprocessor"),
@@ -281,12 +323,12 @@ class Script(scripts.Script):
                     (weight, f"ControlNet Weight"),
                 ])
 
-                def create_canvas(h, w): 
+                def create_canvas(h, w):
                     return np.zeros(shape=(h, w, 3), dtype=np.uint8) + 255
                 
                 def svgPreprocess(inputs):
                     if (inputs):
-                        if (inputs['image'].startswith("data:image/svg+xml;base64,")):
+                        if (inputs['image'].startswith("data:image/svg+xml;base64,") and svgsupport):
                             svg_data = base64.b64decode(inputs['image'].replace('data:image/svg+xml;base64,',''))
                             drawing = svg2rlg(io.BytesIO(svg_data))
                             png_data = renderPM.drawToString(drawing, fmt='PNG')
@@ -348,11 +390,11 @@ class Script(scripts.Script):
                 self.input_image = None
                 self.latest_network.restore(unet)
                 self.latest_network = None
-            
+
             last_module = self.latest_params[0]
             if last_module is not None:
                 self.unloadable.get(last_module, lambda:None)()
-    
+
         enabled, module, model, weight, image, scribble_mode, \
             resize_mode, rgbbgr_mode, lowvram, pres, pthr_a, pthr_b, guidance_strength = args
         
@@ -485,7 +527,10 @@ class Script(scripts.Script):
         # control = torch.stack([control for _ in range(bsz)], dim=0)
         self.latest_network.notify(control, weight, guidance_strength)
         self.set_infotext_fields(p, self.latest_params, weight)
-        
+
+        if shared.opts.data.get("control_net_skip_img2img_processing") and hasattr(p, "init_images"):
+            swap_img2img_pipeline(p)
+
     def postprocess(self, p, processed, *args):
         is_img2img = issubclass(type(p), StableDiffusionProcessingImg2Img)
         is_img2img_batch_tab = is_img2img and img2img_tab_tracker.submit_img2img_tab == 'img2img_batch_tab'
@@ -554,9 +599,14 @@ def on_ui_settings():
     shared.opts.add_option("control_net_no_detectmap", shared.OptionInfo(
         False, "Do not append detectmap to output", gr.Checkbox, {"interactive": True}, section=section))
     shared.opts.add_option("control_net_only_midctrl_hires", shared.OptionInfo(
-        True, "Use mid-layer control on highres pass (second pass)", gr.Checkbox, {"interactive": True}, section=section))
+        True, "Use mid-control on highres pass (second pass)", gr.Checkbox, {"interactive": True}, section=section))
     shared.opts.add_option("control_net_allow_script_control", shared.OptionInfo(
         False, "Allow other script to control this extension", gr.Checkbox, {"interactive": True}, section=section))
+    shared.opts.add_option("control_net_skip_img2img_processing", shared.OptionInfo(
+        False, "Skip img2img processing when using img2img initial image", gr.Checkbox, {"interactive": True}, section=section))
+    shared.opts.add_option("control_net_only_mid_control", shared.OptionInfo(
+        False, "Only use mid-control when inference", gr.Checkbox, {"interactive": True}, section=section))
+    
 
     # control_net_skip_hires
 
@@ -583,6 +633,9 @@ class Img2ImgTabTracker:
         if type(component) is gr.Button and component.elem_id == 'img2img_generate':
             component.click(fn=self.save_submit_img2img_tab, inputs=[], outputs=[])
             return
+        
+        if not hasattr(component, "parent"):
+            return
 
         tab = component.parent
         is_tab = type(tab) is gr.Tab and tab.elem_id is not None
@@ -595,3 +648,4 @@ class Img2ImgTabTracker:
 
 img2img_tab_tracker = Img2ImgTabTracker()
 script_callbacks.on_after_component(img2img_tab_tracker.on_after_component_callback)
+
