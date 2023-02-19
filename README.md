@@ -1,18 +1,18 @@
 ## Highres.fix disable
 This repo add a 'Disable ControlNet in Highres.fix' checkbox and a 'Highres Weight' Slider, which allow you to control weight in Highres.fix pass, or just simply disable it.
 ### Modify file in WebUI
-You have to modify ./modules/processing.py, like this:
-
-**Import part**
-
-`sys.path.append('./extensions/sd-webui-controlnet')`
-
-`from scripts.controlnet import disable_controlnet`
-![QQ截图20230215205227](https://user-images.githubusercontent.com/52597991/219041010-69aaf028-9656-483e-9dab-81b88fa33612.png)
+You have to modify ./modules/processing.py like this:
 
 **StableDiffusionProcessingTxt2Img/sample/save_intermediate()**
-` disable_controlnet()`
-![QQ截图20230215205255](https://user-images.githubusercontent.com/52597991/219041197-b3b6a0df-db43-47ef-bfe9-64de05262694.png)
+```
+            # highres hack
+            sys.path.append('./extensions/sd-webui-controlnet')
+            from scripts.controlnet import disable_controlnet
+            sys.path.remove('./extensions/sd-webui-controlnet')
+            disable_controlnet()
+            # highres hack end
+```
+![QQ截图20230219112655](https://user-images.githubusercontent.com/52597991/219912728-b4385ece-2920-4e8c-96bc-a53a23e5169d.png)
 
 ### Example
 This example uses canny model.
