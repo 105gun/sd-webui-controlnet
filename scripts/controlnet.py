@@ -406,7 +406,7 @@ class Script(scripts.Script):
             f"ControlNet Model": model,
             f"ControlNet Weight": weight,
             f"ControlNet Guidance Strength": guidance,
-            f"ControlNet Highres.fix Weight": highres_weight,
+            # f"ControlNet Highres.fix Weight": highres_weight,
             f"ControlNet Highres.fix Disable": highres_disable,
         })
 
